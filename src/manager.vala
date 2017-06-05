@@ -1,7 +1,7 @@
 /*
  *  pamac-vala
  *
- *  Copyright (C) 2014-2015 Guillaume Benoit <guillaume@manjaro.org>
+ *  Copyright (C) 2014-2017 Guillaume Benoit <guillaume@manjaro.org>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -19,7 +19,7 @@
 
 namespace Pamac {
 
-	public class Manager : Gtk.Application {
+	class Manager : Gtk.Application {
 		ManagerWindow manager_window;
 		bool pamac_run;
 
@@ -46,11 +46,24 @@ namespace Pamac {
 				msg.destroy ();
 			} else {
 				manager_window = new ManagerWindow (this);
+				// quit accel
 				var action =  new SimpleAction ("quit", null);
 				action.activate.connect  (() => {this.quit ();});
 				this.add_action (action);
-				string[] accels = {"<Control>Q", "<Control>W"};
+				string[] accels = {"<Ctrl>Q", "<Ctrl>W"};
 				this.set_accels_for_action ("app.quit", accels);
+				// back accel
+				action =  new SimpleAction ("back", null);
+				action.activate.connect  (() => {manager_window.on_button_back_clicked ();});
+				this.add_action (action);
+				accels = {"<Alt>Left"};
+				this.set_accels_for_action ("app.back", accels);
+				// search accel
+				action =  new SimpleAction ("search", null);
+				action.activate.connect  (() => {manager_window.filters_stack.visible_child_name = "search";});
+				this.add_action (action);
+				accels = {"<Ctrl>F"};
+				this.set_accels_for_action ("app.search", accels);
 			}
 		}
 
@@ -94,7 +107,7 @@ namespace Pamac {
 		}
 	}
 
-	public static int main (string[] args) {
+	static int main (string[] args) {
 		var manager = new Manager ();
 		return manager.run (args);
 	}

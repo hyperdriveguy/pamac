@@ -163,7 +163,7 @@ namespace Pamac {
 			timer = new Timer ();
 			extern_lock = false;
 			refresh_handle ();
-			Timeout.add (500, check_pacman_running);
+			Timeout.add (500, check_extern_lock);
 			create_thread_pool ();
 			cancellable = new Cancellable ();
 			curl = new Curl.Easy ();
@@ -214,6 +214,7 @@ namespace Pamac {
 					message = _("Failed to initialize alpm library")
 				};
 				trans_commit_finished (false);
+				return;
 			} else {
 				alpm_handle.eventcb = (Alpm.EventCallBack) cb_event;
 				alpm_handle.progresscb = (Alpm.ProgressCallBack) cb_progress;
@@ -223,10 +224,16 @@ namespace Pamac {
 				alpm_handle.logcb = (Alpm.LogCallBack) cb_log;
 				lockfile = GLib.File.new_for_path (alpm_handle.lockfile);
 			}
-			files_handle = alpm_config.get_files_handle ();
+			files_handle = alpm_config.get_handle (true);
+			files_handle.eventcb = (Alpm.EventCallBack) cb_event;
+			files_handle.progresscb = (Alpm.ProgressCallBack) cb_progress;
+			files_handle.questioncb = (Alpm.QuestionCallBack) cb_question;
+			files_handle.fetchcb = (Alpm.FetchCallBack) cb_fetch;
+			files_handle.totaldlcb = (Alpm.TotalDownloadCallBack) cb_totaldownload;
+			files_handle.logcb = (Alpm.LogCallBack) cb_log;
 		}
 
-		private bool check_pacman_running () {
+		private bool check_extern_lock () {
 			if (extern_lock) {
 				if (!lockfile.query_exists ()) {
 					extern_lock = false;
@@ -236,27 +243,56 @@ namespace Pamac {
 			} else {
 				if (lockfile.query_exists ()) {
 					if (databases_lock_mutex.trylock ()) {
-						// Functions trans_prepare, sysupgrade_prepare and refresh threads are blocked until unlock.
-						// An extern lock appears, check if pacman running.
+						extern_lock = true;
+						// Functions trans_init, build_prepare and refresh threads are blocked until unlock.
+						// An extern lock appears, check if it is not a too old lock.
 						int exit_status;
+						string output;
+						uint64 lockfile_time;
 						try {
-							Process.spawn_command_line_sync ("pidof pacman",
-														null,
-														null,
-														out exit_status);
+							// get lockfile modification time since epoch
+							Process.spawn_command_line_sync ("stat -c %Y %s".printf (alpm_handle.lockfile),
+															out output,
+															null,
+															out exit_status);
+							if (exit_status == 0) {
+								string[] splitted = output.split ("\n");
+								if (splitted.length == 2) {
+									if (uint64.try_parse (splitted[0], out lockfile_time)) {
+										uint64 boot_time;
+										// get boot time since epoch
+										Process.spawn_command_line_sync ("cat /proc/stat",
+																		out output,
+																		null,
+																		out exit_status);
+										if (exit_status == 0) {
+											splitted = output.split ("\n");
+											foreach (unowned string line in splitted) {
+												if ("btime" in line) {
+													string[] space_splitted = line.split (" ");
+													if (space_splitted.length == 2) {
+														if (uint64.try_parse (space_splitted[1], out boot_time)) {
+															// check if lock file is older than boot time
+															if (lockfile_time < boot_time) {
+																// remove the unneeded lock file.
+																try {
+																	lockfile.delete ();
+																} catch (Error e) {
+																	stderr.printf ("Error: %s\n", e.message);
+																}
+																extern_lock = false;
+																databases_lock_mutex.unlock ();
+															}
+														}
+													}
+												}
+											}
+										}
+									}
+								}
+							}
 						} catch (SpawnError e) {
 							stderr.printf ("Error: %s\n", e.message);
-						}
-						if (exit_status == 0) {
-							extern_lock = true;
-						} else {
-							// Pacman is not running: remove the unneeded lock file.
-							try {
-								lockfile.delete ();
-							} catch (Error e) {
-								stderr.printf ("Error: %s\n", e.message);
-							}
-							databases_lock_mutex.unlock ();
 						}
 					}
 				}
@@ -423,6 +459,31 @@ namespace Pamac {
 			});
 		}
 
+		private bool update_dbs (Alpm.Handle handle, int force) {
+			bool success = false;
+			unowned Alpm.List<unowned Alpm.DB> syncdbs = handle.syncdbs;
+			while (syncdbs != null) {
+				if (cancellable.is_cancelled ()) {
+					break;
+				}
+				unowned Alpm.DB db = syncdbs.data;
+				if (db.update (force) >= 0) {
+					success = true;
+				} else {
+					Alpm.Errno errno = handle.errno ();
+					current_error.errno = (uint) errno;
+					if (errno != 0) {
+						// download error details are set in cb_fetch
+						if (errno != Alpm.Errno.EXTERNAL_DOWNLOAD) {
+							current_error.details = { Alpm.strerror (errno) };
+						}
+					}
+				}
+				syncdbs.next ();
+			}
+			return success;
+		}
+
 		private void refresh () {
 			current_error = ErrorInfos ();
 			if (!databases_lock_mutex.trylock ()) {
@@ -437,44 +498,26 @@ namespace Pamac {
 				return;
 			}
 			write_log_file ("synchronizing package lists");
-			int force = (force_refresh) ? 1 : 0;
-			uint success = 0;
 			cancellable.reset ();
-			string[] dbexts = {".db", ".files"};
-			unowned Alpm.List<unowned Alpm.DB> syncdbs = alpm_handle.syncdbs;
-			while (syncdbs != null) {
-				unowned Alpm.DB db = syncdbs.data;
-				if (cancellable.is_cancelled ()) {
-					alpm_handle.dbext = ".db";
-					refresh_finished (false);
-					databases_lock_mutex.unlock ();
-					return;
-				}
-				foreach (unowned string dbext in dbexts) {
-					alpm_handle.dbext = dbext;
-					if (db.update (force) >= 0) {
-						success++;
-					} else {
-						Alpm.Errno errno = alpm_handle.errno ();
-						current_error.errno = (uint) errno;
-						if (errno != 0) {
-							// download error details are set in cb_fetch
-							if (errno != Alpm.Errno.EXTERNAL_DOWNLOAD) {
-								current_error.details = { Alpm.strerror (errno) };
-							}
-						}
-					}
-				}
-				syncdbs.next ();
+			int force = (force_refresh) ? 1 : 0;
+			// update ".db"
+			bool success = update_dbs (alpm_handle, force);
+			if (cancellable.is_cancelled ()) {
+				refresh_finished (false);
+				databases_lock_mutex.unlock ();
+				return;
 			}
-			alpm_handle.dbext = ".db";
-			// We should always succeed if at least one DB was upgraded - we may possibly
-			// fail later with unresolved deps, but that should be rare, and would be expected
-			if (success == 0) {
+			// update ".files", do not need to know if we succeeded
+			update_dbs (files_handle, force);
+			if (cancellable.is_cancelled ()) {
+				refresh_finished (false);
+			} else if (success) {
+				// We should always succeed if at least one DB was upgraded - we may possibly
+				// fail later with unresolved deps, but that should be rare, and would be expected
+				refresh_finished (true);
+			} else {
 				current_error.message = _("Failed to synchronize any databases");
 				refresh_finished (false);
-			} else {
-				refresh_finished (true);
 			}
 			databases_lock_mutex.unlock ();
 		}
@@ -2218,10 +2261,9 @@ namespace Pamac {
 
 		[DBus (no_reply = true)]
 		public void quit () {
-			// be sure to not quit with locked databases
-			if (thread_pool.get_num_threads () == 0) {
-				loop.quit ();
-			}
+			// wait for all tasks to be processed
+			ThreadPool.free ((owned) thread_pool, false, true);
+			loop.quit ();
 		}
 	// End of Daemon Object
 	}

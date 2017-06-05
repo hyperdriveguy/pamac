@@ -94,6 +94,8 @@ namespace Pamac {
 		public void left_clicked () {
 			if (get_icon () == "pamac-tray-update") {
 				execute_updater ();
+			} else {
+				execute_manager ();
 			}
 		}
 
@@ -252,7 +254,7 @@ namespace Pamac {
 			return run;
 		}
 
-		bool check_pacman_running () {
+		bool check_extern_lock () {
 			if (extern_lock) {
 				if (!lockfile.query_exists ()) {
 					extern_lock = false;
@@ -298,6 +300,9 @@ namespace Pamac {
 
 			create_menu ();
 			init_status_icon ();
+			set_icon (noupdate_icon_name);
+			set_tooltip (noupdate_info);
+			set_icon_visible (!pamac_config.no_update_hide_icon);
 
 			Notify.init (_("Update Manager"));
 
@@ -309,7 +314,7 @@ namespace Pamac {
 				//try standard lock file
 				lockfile = GLib.File.new_for_path ("var/lib/pacman/db.lck");
 			}
-			Timeout.add (200, check_pacman_running);
+			Timeout.add (200, check_extern_lock);
 			start_refresh ();
 			launch_refresh_timeout (pamac_config.refresh_period);
 

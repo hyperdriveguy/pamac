@@ -61,7 +61,7 @@ namespace Pamac {
 		[GtkChild]
 		Gtk.TreeViewColumn aur_state_column;
 		[GtkChild]
-		Gtk.Stack filters_stack;
+		public Gtk.Stack filters_stack;
 		[GtkChild]
 		Gtk.StackSwitcher filters_stackswitcher;
 		[GtkChild]
@@ -159,7 +159,9 @@ namespace Pamac {
 
 		bool populate_window () {
 			this.get_window ().set_cursor (new Gdk.Cursor.for_display (Gdk.Display.get_default (), Gdk.CursorType.WATCH));
-
+			while (Gtk.events_pending ()) {
+				Gtk.main_iteration ();
+			}
 			right_click_menu = new Gtk.Menu ();
 			deselect_item = new Gtk.MenuItem.with_label (dgettext (null, "Deselect"));
 			deselect_item.activate.connect (on_deselect_item_activate);
@@ -530,7 +532,12 @@ namespace Pamac {
 					transaction.get_aur_details.begin (details.name, (obj, res) => {
 						AURPackageDetails aur_details = transaction.get_aur_details.end (res);
 						if (aur_details.name != "") {
-							if (aur_details.version == details.version) {
+							// always show reinstall button for VCS package
+							if (aur_details.name.has_suffix ("-git") ||
+								aur_details.name.has_suffix ("-svn") ||
+								aur_details.name.has_suffix ("-bzr") ||
+								aur_details.name.has_suffix ("-hg") ||
+								aur_details.version == details.version) {
 								reinstall_togglebutton.visible = true;
 								reinstall_togglebutton.active = transaction.to_build.contains (details.name);
 							}
@@ -1045,7 +1052,7 @@ namespace Pamac {
 		}
 
 		[GtkCallback]
-		void on_button_back_clicked () {
+		public void on_button_back_clicked () {
 			string? pkgname = display_package_queue.pop_tail ();
 			if (pkgname != null) {
 				AlpmPackage pkg = transaction.get_installed_pkg (pkgname);
@@ -1684,7 +1691,7 @@ namespace Pamac {
 		void on_refresh_button_clicked () {
 			this.get_window ().set_cursor (new Gdk.Cursor.for_display (Gdk.Display.get_default (), Gdk.CursorType.WATCH));
 			refreshing = true;
-			transaction.start_refresh (false);
+			transaction.start_refresh (true);
 			apply_button.sensitive = false;
 			transaction_infobox.show_all ();
 		}

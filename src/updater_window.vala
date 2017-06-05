@@ -81,7 +81,9 @@ namespace Pamac {
 
 		bool populate_window () {
 			this.get_window ().set_cursor (new Gdk.Cursor.for_display (Gdk.Display.get_default (), Gdk.CursorType.WATCH));
-
+			while (Gtk.events_pending ()) {
+				Gtk.main_iteration ();
+			}
 			repos_updates_list = new Gtk.ListStore (7, typeof (bool), typeof (string), typeof (string), typeof (string),typeof (string), typeof (string), typeof (uint64));
 			repos_updates_treeview.set_model (repos_updates_list);
 			aur_updates_list = new Gtk.ListStore (4, typeof (bool), typeof (string), typeof (string), typeof (string));
@@ -107,7 +109,11 @@ namespace Pamac {
 			// A timeout is needed to let the time to the daemon to deal
 			// with potential other package manager process running.
 			Timeout.add (500, () => {
-				on_refresh_button_clicked ();
+				this.get_window ().set_cursor (new Gdk.Cursor.for_display (Gdk.Display.get_default (), Gdk.CursorType.WATCH));
+				transaction_infobox.show_all ();
+				details_button.sensitive = true;
+				cancel_button.sensitive = true;
+				transaction.start_refresh (false);
 				return false;
 			});
 
@@ -195,7 +201,7 @@ namespace Pamac {
 		}
 
 		[GtkCallback]
-		void on_button_back_clicked () {
+		public void on_button_back_clicked () {
 			if (aur_scrolledwindow.visible) {
 				stackswitcher.visible = true;
 				stack.visible_child_name = previous_visible_child_name;
@@ -240,7 +246,7 @@ namespace Pamac {
 			apply_button.sensitive = false;
 			details_button.sensitive = true;
 			cancel_button.sensitive = true;
-			transaction.start_refresh (false);
+			transaction.start_refresh (true);
 		}
 
 		[GtkCallback]

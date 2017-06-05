@@ -17,7 +17,7 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-const string VERSION = "4.3.4";
+const string VERSION = "4.3.7";
 
 namespace Pamac {
 	[DBus (name = "org.manjaro.pamac")]
@@ -279,12 +279,15 @@ namespace Pamac {
 		}
 
 		public void run_about_dialog () {
+			string[] authors = {"Guillaume Benoit"};
 			Gtk.show_about_dialog (
 				application_window,
 				"program_name", "Pamac",
+				"icon_name", "system-software-install",
 				"logo_icon_name", "system-software-install",
 				"comments", dgettext (null, "A Gtk3 frontend for libalpm"),
 				"copyright", "Copyright © 2017 Guillaume Benoit",
+				"authors", authors,
 				"version", VERSION,
 				"license_type", Gtk.License.GPL_3_0,
 				"website", "http://github.com/manjaro/pamac");
@@ -1049,7 +1052,7 @@ namespace Pamac {
 			reset_progress_box (action);
 			build_cancellable.reset ();
 			start_progressbar_pulse ();
-			important_details_outpout (true);
+			important_details_outpout (false);
 			to_build.remove_all ();
 			string [] built_pkgs = {};
 			int status = 1;
@@ -1103,6 +1106,7 @@ namespace Pamac {
 					start_trans_prepare (flags, {}, {}, built_pkgs, {});
 				}
 			} else {
+				important_details_outpout (true);
 				to_load.remove_all ();
 				to_build_queue.clear ();
 				stop_progressbar_pulse ();
@@ -1223,7 +1227,10 @@ namespace Pamac {
 					detailed_action = dgettext (null, "Generation failed") + "...";
 					break;
 				case 24: //Alpm.Event.Type.SCRIPTLET_INFO
-					progress_box.action_label.label = dgettext (null, "Configuring %s").printf (previous_filename) + "...";
+					// hooks output are also emitted as SCRIPTLET_INFO
+					if (previous_filename != "") {
+						progress_box.action_label.label = dgettext (null, "Configuring %s").printf (previous_filename) + "...";
+					}
 					detailed_action = details[0].replace ("\n", "");
 					important_details_outpout (false);
 					break;
@@ -1271,6 +1278,7 @@ namespace Pamac {
 							action = dgettext (null, "Running pre-transaction hooks") + "...";
 							break;
 						case 2: //Alpm.HookWhen.POST_TRANSACTION
+							previous_filename = "";
 							action = dgettext (null, "Running post-transaction hooks") + "...";
 							break;
 						default:
@@ -1394,6 +1402,9 @@ namespace Pamac {
 					if (filename.has_suffix (".db")) {
 						string action = dgettext (null, "Refreshing %s").printf (filename.replace (".db", "")) + "...";
 						reset_progress_box (action);
+					} else if (filename.has_suffix (".files")) {
+						string action = dgettext (null, "Refreshing %s").printf (filename.replace (".files", "")) + "...";
+						reset_progress_box (action);
 					}
 				} else if (xfered == total) {
 					timer.stop ();
@@ -1481,9 +1492,17 @@ namespace Pamac {
 
 		void show_warnings () {
 			if (warning_textbuffer.len > 0) {
+				var flags = Gtk.DialogFlags.MODAL;
+				int use_header_bar;
+				Gtk.Settings.get_default ().get ("gtk-dialogs-use-header", out use_header_bar);
+				if (use_header_bar == 1) {
+					flags |= Gtk.DialogFlags.USE_HEADER_BAR;
+				}
 				var dialog = new Gtk.Dialog.with_buttons (dgettext (null, "Warning"),
 														application_window,
-														Gtk.DialogFlags.MODAL | Gtk.DialogFlags.USE_HEADER_BAR);
+														flags);
+				dialog.border_width = 6;
+				dialog.icon_name = "system-software-install";
 				dialog.deletable = false;
 				unowned Gtk.Widget widget = dialog.add_button (dgettext (null, "_Close"), Gtk.ResponseType.CLOSE);
 				widget.can_focus = true;
@@ -1508,9 +1527,17 @@ namespace Pamac {
 		}
 
 		void display_error (string message, string[] details) {
+			var flags = Gtk.DialogFlags.MODAL;
+			int use_header_bar;
+			Gtk.Settings.get_default ().get ("gtk-dialogs-use-header", out use_header_bar);
+			if (use_header_bar == 1) {
+				flags |= Gtk.DialogFlags.USE_HEADER_BAR;
+			}
 			var dialog = new Gtk.Dialog.with_buttons (message,
 													application_window,
-													Gtk.DialogFlags.MODAL | Gtk.DialogFlags.USE_HEADER_BAR);
+													flags);
+			dialog.border_width = 6;
+			dialog.icon_name = "system-software-install";
 			var textbuffer = new StringBuilder ();
 			if (details.length != 0) {
 				show_in_term (message + ":");
@@ -1616,6 +1643,10 @@ namespace Pamac {
 						success = false;
 						finish_transaction ();
 					}
+				} else if (build_after_sysupgrade) {
+					// there only AUR packages to build
+					release ();
+					on_trans_commit_finished (true);
 				} else {
 					//var err = ErrorInfos ();
 					//err.message = dgettext (null, "Nothing to do") + "\n";
